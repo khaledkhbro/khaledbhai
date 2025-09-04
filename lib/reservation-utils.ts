@@ -1,4 +1,4 @@
-import { createClient } from "@/lib/supabase/client"
+import { apiClient } from "./api-client"
 
 export interface ReservationStatus {
   isReserved: boolean
@@ -9,37 +9,8 @@ export interface ReservationStatus {
 
 export async function checkReservationStatus(jobId: string): Promise<ReservationStatus> {
   try {
-    const supabase = createClient()
-
-    const { data: job, error } = await supabase
-      .from("microjobs")
-      .select("is_reserved, reserved_until, reserved_by")
-      .eq("id", jobId)
-      .single()
-
-    if (error || !job) {
-      return { isReserved: false }
-    }
-
-    if (!job.is_reserved || !job.reserved_until) {
-      return { isReserved: false }
-    }
-
-    const now = new Date().getTime()
-    const reservedUntil = new Date(job.reserved_until).getTime()
-    const timeLeft = reservedUntil - now
-
-    if (timeLeft <= 0) {
-      // Reservation has expired, trigger cleanup
-      await expireReservation(jobId)
-      return { isReserved: false, expired: true }
-    }
-
-    return {
-      isReserved: true,
-      timeLeft,
-      reservedBy: job.reserved_by,
-    }
+    const response = await apiClient.request(`/jobs/${jobId}/reservation-status`)
+    return response
   } catch (error) {
     console.error("Error checking reservation status:", error)
     return { isReserved: false }
@@ -48,39 +19,7 @@ export async function checkReservationStatus(jobId: string): Promise<Reservation
 
 export async function expireReservation(jobId: string): Promise<boolean> {
   try {
-    const supabase = createClient()
-
-    // Update the job
-    const { error: jobError } = await supabase
-      .from("microjobs")
-      .update({
-        is_reserved: false,
-        reserved_by: null,
-        reserved_until: null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", jobId)
-
-    if (jobError) {
-      console.error("Error updating job:", jobError)
-      return false
-    }
-
-    // Update the reservation
-    const { error: reservationError } = await supabase
-      .from("job_reservations")
-      .update({
-        status: "expired",
-        updated_at: new Date().toISOString(),
-      })
-      .eq("job_id", jobId)
-      .eq("status", "active")
-
-    if (reservationError) {
-      console.error("Error updating reservation:", reservationError)
-      return false
-    }
-
+    await apiClient.request(`/jobs/${jobId}/expire-reservation`, { method: "POST" })
     return true
   } catch (error) {
     console.error("Error expiring reservation:", error)
@@ -106,32 +45,7 @@ export function formatTimeLeft(milliseconds: number): string {
 
 export async function getUserReservations(userId: string) {
   try {
-    const supabase = createClient()
-
-    const { data: reservations, error } = await supabase
-      .from("job_reservations")
-      .select(`
-        id,
-        job_id,
-        expires_at,
-        status,
-        created_at,
-        microjobs (
-          id,
-          title,
-          budget_max,
-          category:categories(name)
-        )
-      `)
-      .eq("user_id", userId)
-      .eq("status", "active")
-      .order("created_at", { ascending: false })
-
-    if (error) {
-      console.error("Error fetching user reservations:", error)
-      return []
-    }
-
+    const reservations = await apiClient.getReservations()
     return reservations || []
   } catch (error) {
     console.error("Error in getUserReservations:", error)

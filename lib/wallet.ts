@@ -66,33 +66,36 @@ export interface PaymentSchedule {
   processedAt?: string
 }
 
-// Real wallet functions using localStorage
-export async function getWallet(userId: string): Promise<Wallet> {
-  await new Promise((resolve) => setTimeout(resolve, 300))
+// API client for backend communication
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080"
 
-  const wallets = JSON.parse(localStorage.getItem("wallets") || "{}")
+async function apiCall(endpoint: string, options: RequestInit = {}) {
+  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+    ...options,
+  })
 
-  if (!wallets[userId]) {
-    const newWallet: Wallet = {
-      id: `wallet_${userId}`,
-      userId,
-      balance: 0,
-      depositBalance: 0,
-      earningsBalance: 0,
-      pendingBalance: 0,
-      totalEarned: 0,
-      totalSpent: 0,
-      upcomingPayments: 0,
-      pendingPayments: 0,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    }
-    wallets[userId] = newWallet
-    localStorage.setItem("wallets", JSON.stringify(wallets))
-    return newWallet
+  if (!response.ok) {
+    const error = await response.text()
+    throw new Error(`API Error: ${response.status} - ${error}`)
   }
 
-  return wallets[userId]
+  return response.json()
+}
+
+export async function getWallet(userId: string): Promise<Wallet> {
+  try {
+    console.log("[v0] 💰 WALLET: Fetching wallet for user:", userId)
+    const wallet = await apiCall(`/api/wallet/${userId}`)
+    console.log("[v0] 💰 WALLET: Retrieved wallet from database:", wallet)
+    return wallet
+  } catch (error) {
+    console.error("[v0] ❌ WALLET: Failed to fetch wallet:", error)
+    throw new Error("Failed to fetch wallet data")
+  }
 }
 
 export async function getTransactions(
@@ -103,48 +106,40 @@ export async function getTransactions(
     limit?: number
   },
 ): Promise<WalletTransaction[]> {
-  await new Promise((resolve) => setTimeout(resolve, 400))
+  try {
+    const userId = walletId.replace("wallet_", "")
+    const params = new URLSearchParams()
 
-  const transactions = JSON.parse(localStorage.getItem("wallet_transactions") || "[]")
-  let filteredTransactions = transactions.filter((t: WalletTransaction) => t.walletId === walletId)
+    if (filters?.type) params.append("type", filters.type)
+    if (filters?.status) params.append("status", filters.status)
+    if (filters?.limit) params.append("limit", filters.limit.toString())
 
-  if (filters?.type) {
-    filteredTransactions = filteredTransactions.filter((t: WalletTransaction) => t.type === filters.type)
+    const queryString = params.toString()
+    const endpoint = `/api/wallet/${userId}/transactions${queryString ? `?${queryString}` : ""}`
+
+    console.log("[v0] 💰 WALLET: Fetching transactions from:", endpoint)
+    const transactions = await apiCall(endpoint)
+    console.log("[v0] 💰 WALLET: Retrieved", transactions.length, "transactions from database")
+    return transactions
+  } catch (error) {
+    console.error("[v0] ❌ WALLET: Failed to fetch transactions:", error)
+    throw new Error("Failed to fetch transaction data")
   }
-
-  if (filters?.status) {
-    filteredTransactions = filteredTransactions.filter((t: WalletTransaction) => t.status === filters.status)
-  }
-
-  if (filters?.limit) {
-    filteredTransactions = filteredTransactions.slice(0, filters.limit)
-  }
-
-  return filteredTransactions.sort(
-    (a: WalletTransaction, b: WalletTransaction) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-  )
 }
 
 export async function getWalletTransactions(userId: string): Promise<WalletTransaction[]> {
-  const wallet = await getWallet(userId)
-  return getTransactions(wallet.id)
+  return getTransactions(`wallet_${userId}`)
 }
 
 export async function getPaymentMethods(userId: string): Promise<PaymentMethod[]> {
-  await new Promise((resolve) => setTimeout(resolve, 200))
-
-  const paymentMethods = JSON.parse(localStorage.getItem("payment_methods") || "{}")
-  return paymentMethods[userId] || []
-}
-
-function generateUniqueId(): string {
-  // Use crypto.randomUUID() if available (modern browsers)
-  if (typeof crypto !== "undefined" && crypto.randomUUID) {
-    return crypto.randomUUID()
+  try {
+    console.log("[v0] 💳 PAYMENT: Fetching payment methods for user:", userId)
+    const methods = await apiCall(`/api/wallet/${userId}/payment-methods`)
+    return methods || []
+  } catch (error) {
+    console.error("[v0] ❌ PAYMENT: Failed to fetch payment methods:", error)
+    return []
   }
-
-  // Fallback to timestamp + random string for better uniqueness
-  return `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
 }
 
 export async function createDeposit(data: {
@@ -152,43 +147,21 @@ export async function createDeposit(data: {
   paymentMethodId: string
   userId: string
 }): Promise<WalletTransaction> {
-  await new Promise((resolve) => setTimeout(resolve, 1000))
-
-  const wallet = await getWallet(data.userId)
-  const feeSettings = await getAdminFeeSettings("deposit")
-  const feeAmount = calculateFee(data.amount, feeSettings)
-  const netAmount = data.amount - feeAmount
-
-  const newTransaction: WalletTransaction = {
-    id: `txn_${generateUniqueId()}`,
-    walletId: wallet.id,
-    type: "deposit",
-    amount: data.amount,
-    feeAmount,
-    netAmount,
-    balanceType: "deposit",
-    description: `Deposit from payment method${feeAmount > 0 ? ` (Fee: $${feeAmount.toFixed(2)})` : ""}`,
-    status: "completed",
-    createdAt: new Date().toISOString(),
+  try {
+    console.log("[v0] 💰 DEPOSIT: Creating deposit:", data)
+    const transaction = await apiCall(`/api/wallet/${data.userId}/deposit`, {
+      method: "POST",
+      body: JSON.stringify({
+        amount: data.amount,
+        paymentMethodId: data.paymentMethodId,
+      }),
+    })
+    console.log("[v0] ✅ DEPOSIT: Created successfully:", transaction.id)
+    return transaction
+  } catch (error) {
+    console.error("[v0] ❌ DEPOSIT: Failed to create deposit:", error)
+    throw new Error("Failed to process deposit")
   }
-
-  // Update wallet deposit balance
-  const wallets = JSON.parse(localStorage.getItem("wallets") || "{}")
-  wallets[data.userId].depositBalance += netAmount
-  wallets[data.userId].balance += netAmount // Legacy compatibility
-  wallets[data.userId].updatedAt = new Date().toISOString()
-  localStorage.setItem("wallets", JSON.stringify(wallets))
-
-  // Save transaction and fee collection
-  const transactions = JSON.parse(localStorage.getItem("wallet_transactions") || "[]")
-  transactions.push(newTransaction)
-  localStorage.setItem("wallet_transactions", JSON.stringify(transactions))
-
-  if (feeAmount > 0) {
-    await recordFeeCollection(newTransaction.id, "deposit", data.amount, feeSettings, feeAmount)
-  }
-
-  return newTransaction
 }
 
 export async function createWithdrawal(data: {
@@ -196,72 +169,39 @@ export async function createWithdrawal(data: {
   paymentMethodId: string
   userId: string
 }): Promise<WalletTransaction> {
-  await new Promise((resolve) => setTimeout(resolve, 1000))
-
-  const wallet = await getWallet(data.userId)
-
-  // Only earnings balance can be withdrawn
-  if (wallet.earningsBalance < data.amount) {
-    throw new Error("Insufficient earnings balance for withdrawal")
+  try {
+    console.log("[v0] 💰 WITHDRAWAL: Creating withdrawal:", data)
+    const transaction = await apiCall(`/api/wallet/${data.userId}/withdrawal`, {
+      method: "POST",
+      body: JSON.stringify({
+        amount: data.amount,
+        paymentMethodId: data.paymentMethodId,
+      }),
+    })
+    console.log("[v0] ✅ WITHDRAWAL: Created successfully:", transaction.id)
+    return transaction
+  } catch (error) {
+    console.error("[v0] ❌ WITHDRAWAL: Failed to create withdrawal:", error)
+    throw new Error("Failed to process withdrawal")
   }
-
-  const feeSettings = await getAdminFeeSettings("withdrawal")
-  const feeAmount = calculateFee(data.amount, feeSettings)
-  const netAmount = data.amount - feeAmount
-
-  const newTransaction: WalletTransaction = {
-    id: `txn_${generateUniqueId()}`,
-    walletId: wallet.id,
-    type: "withdrawal",
-    amount: -data.amount,
-    feeAmount,
-    netAmount: -netAmount,
-    balanceType: "earnings",
-    description: `Withdrawal to payment method${feeAmount > 0 ? ` (Fee: $${feeAmount.toFixed(2)})` : ""}`,
-    status: "pending",
-    createdAt: new Date().toISOString(),
-  }
-
-  // Update wallet earnings balance
-  const wallets = JSON.parse(localStorage.getItem("wallets") || "{}")
-  wallets[data.userId].earningsBalance -= data.amount
-  wallets[data.userId].totalSpent += data.amount
-  wallets[data.userId].updatedAt = new Date().toISOString()
-  localStorage.setItem("wallets", JSON.stringify(wallets))
-
-  // Save transaction and fee collection
-  const transactions = JSON.parse(localStorage.getItem("wallet_transactions") || "[]")
-  transactions.push(newTransaction)
-  localStorage.setItem("wallet_transactions", JSON.stringify(transactions))
-
-  if (feeAmount > 0) {
-    await recordFeeCollection(newTransaction.id, "withdrawal", data.amount, feeSettings, feeAmount)
-  }
-
-  return newTransaction
 }
 
 export async function addPaymentMethod(
   userId: string,
   method: Omit<PaymentMethod, "id" | "userId" | "createdAt">,
 ): Promise<PaymentMethod> {
-  const paymentMethods = JSON.parse(localStorage.getItem("payment_methods") || "{}")
-
-  if (!paymentMethods[userId]) {
-    paymentMethods[userId] = []
+  try {
+    console.log("[v0] 💳 PAYMENT: Adding payment method for user:", userId)
+    const newMethod = await apiCall(`/api/wallet/${userId}/payment-methods`, {
+      method: "POST",
+      body: JSON.stringify(method),
+    })
+    console.log("[v0] ✅ PAYMENT: Added payment method:", newMethod.id)
+    return newMethod
+  } catch (error) {
+    console.error("[v0] ❌ PAYMENT: Failed to add payment method:", error)
+    throw new Error("Failed to add payment method")
   }
-
-  const newMethod: PaymentMethod = {
-    id: `pm_${Date.now()}`,
-    userId,
-    ...method,
-    createdAt: new Date().toISOString(),
-  }
-
-  paymentMethods[userId].push(newMethod)
-  localStorage.setItem("payment_methods", JSON.stringify(paymentMethods))
-
-  return newMethod
 }
 
 export async function addEarnings(data: {
@@ -271,81 +211,64 @@ export async function addEarnings(data: {
   referenceId?: string
   referenceType?: string
 }): Promise<WalletTransaction> {
-  const wallet = await getWallet(data.userId)
-
-  const newTransaction: WalletTransaction = {
-    id: `txn_${generateUniqueId()}`,
-    walletId: wallet.id,
-    type: "earning",
-    amount: data.amount,
-    feeAmount: 0,
-    netAmount: data.amount,
-    balanceType: "earnings",
-    description: data.description,
-    referenceId: data.referenceId,
-    referenceType: data.referenceType,
-    status: "completed",
-    createdAt: new Date().toISOString(),
+  try {
+    console.log("[v0] 💰 EARNINGS: Adding earnings:", data)
+    const transaction = await apiCall(`/api/wallet/${data.userId}/earnings`, {
+      method: "POST",
+      body: JSON.stringify({
+        amount: data.amount,
+        description: data.description,
+        referenceId: data.referenceId,
+        referenceType: data.referenceType,
+      }),
+    })
+    console.log("[v0] ✅ EARNINGS: Added successfully:", transaction.id)
+    return transaction
+  } catch (error) {
+    console.error("[v0] ❌ EARNINGS: Failed to add earnings:", error)
+    throw new Error("Failed to add earnings")
   }
-
-  // Update wallet earnings balance
-  const wallets = JSON.parse(localStorage.getItem("wallets") || "{}")
-  wallets[data.userId].earningsBalance += data.amount
-  wallets[data.userId].totalEarned += data.amount
-  wallets[data.userId].updatedAt = new Date().toISOString()
-  localStorage.setItem("wallets", JSON.stringify(wallets))
-
-  // Save transaction
-  const transactions = JSON.parse(localStorage.getItem("wallet_transactions") || "[]")
-  transactions.push(newTransaction)
-  localStorage.setItem("wallet_transactions", JSON.stringify(transactions))
-
-  return newTransaction
 }
 
 // Admin fee management functions
 export async function getAdminFeeSettings(feeType: string): Promise<AdminFeeSettings> {
-  const feeSettings = JSON.parse(localStorage.getItem("admin_fee_settings") || "{}")
-
-  if (!feeSettings[feeType]) {
-    // Default fee settings
-    const defaultSettings: AdminFeeSettings = {
+  try {
+    console.log("[v0] ⚙️ FEE: Fetching fee settings for type:", feeType)
+    const settings = await apiCall(`/api/admin/fee-settings/${feeType}`)
+    return settings
+  } catch (error) {
+    console.error("[v0] ❌ FEE: Failed to fetch fee settings:", error)
+    // Return default settings as fallback
+    return {
       id: `fee_${feeType}`,
       feeType: feeType as "deposit" | "withdrawal" | "transaction" | "tip",
       feePercentage: feeType === "deposit" ? 2.5 : feeType === "withdrawal" ? 1.0 : feeType === "tip" ? 0 : 3.0,
       feeFixed: feeType === "withdrawal" ? 0.25 : feeType === "tip" ? 0 : 0,
       minimumFee: feeType === "deposit" ? 0.5 : feeType === "tip" ? 0.5 : 0.25,
       maximumFee: feeType === "tip" ? 100 : undefined,
-      isActive: feeType === "tip" ? true : true,
+      isActive: true,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     }
-    feeSettings[feeType] = defaultSettings
-    localStorage.setItem("admin_fee_settings", JSON.stringify(feeSettings))
-    return defaultSettings
   }
-
-  return feeSettings[feeType]
 }
 
 export async function updateAdminFeeSettings(
   feeType: string,
   settings: Partial<AdminFeeSettings>,
 ): Promise<AdminFeeSettings> {
-  const feeSettings = JSON.parse(localStorage.getItem("admin_fee_settings") || "{}")
-
-  if (!feeSettings[feeType]) {
-    throw new Error("Fee settings not found")
+  try {
+    console.log("[v0] ⚙️ FEE: Updating fee settings for type:", feeType)
+    const updatedSettings = await apiCall(`/api/admin/fee-settings/${feeType}`, {
+      method: "PUT",
+      body: JSON.stringify(settings),
+    })
+    console.log("[v0] ✅ FEE: Updated fee settings successfully")
+    return updatedSettings
+  } catch (error) {
+    console.error("[v0] ❌ FEE: Failed to update fee settings:", error)
+    throw new Error("Failed to update fee settings")
   }
-
-  feeSettings[feeType] = {
-    ...feeSettings[feeType],
-    ...settings,
-    updatedAt: new Date().toISOString(),
-  }
-
-  localStorage.setItem("admin_fee_settings", JSON.stringify(feeSettings))
-  return feeSettings[feeType]
 }
 
 function calculateFee(amount: number, feeSettings: AdminFeeSettings): number {
@@ -364,38 +287,15 @@ function calculateFee(amount: number, feeSettings: AdminFeeSettings): number {
   return Math.round(fee * 100) / 100 // Round to 2 decimal places
 }
 
-async function recordFeeCollection(
-  transactionId: string,
-  feeType: string,
-  originalAmount: number,
-  feeSettings: AdminFeeSettings,
-  feeAmount: number,
-): Promise<void> {
-  const feeCollections = JSON.parse(localStorage.getItem("admin_fee_collections") || "[]")
-
-  const feeCollection = {
-    id: `fee_${generateUniqueId()}`,
-    transactionId,
-    feeType,
-    originalAmount,
-    feePercentage: feeSettings.feePercentage,
-    feeFixed: feeSettings.feeFixed,
-    feeAmount,
-    collectedAt: new Date().toISOString(),
-  }
-
-  feeCollections.push(feeCollection)
-  localStorage.setItem("admin_fee_collections", JSON.stringify(feeCollections))
-}
-
 export async function getUpcomingPayments(userId: string): Promise<PaymentSchedule[]> {
-  const schedules = JSON.parse(localStorage.getItem("payment_schedules") || "[]")
-  return schedules
-    .filter((s: PaymentSchedule) => s.userId === userId && s.status === "scheduled")
-    .sort(
-      (a: PaymentSchedule, b: PaymentSchedule) =>
-        new Date(a.scheduledDate).getTime() - new Date(b.scheduledDate).getTime(),
-    )
+  try {
+    console.log("[v0] 📅 SCHEDULE: Fetching upcoming payments for user:", userId)
+    const payments = await apiCall(`/api/wallet/${userId}/upcoming-payments`)
+    return payments || []
+  } catch (error) {
+    console.error("[v0] ❌ SCHEDULE: Failed to fetch upcoming payments:", error)
+    return []
+  }
 }
 
 export async function getPendingPayments(userId: string): Promise<WalletTransaction[]> {
@@ -413,119 +313,49 @@ export async function addWalletTransaction(data: {
   referenceType?: string
   balanceType?: "deposit" | "earnings"
 }): Promise<WalletTransaction> {
-  await new Promise((resolve) => setTimeout(resolve, 300))
-
-  console.log("[v0] 💰 WALLET: Starting transaction for user:", data.userId)
-  console.log("[v0] 💰 WALLET: Transaction type:", data.type, "Amount:", data.amount)
-  console.log("[v0] 💰 WALLET: Description:", data.description)
-  console.log("[v0] 💰 WALLET: Reference ID:", data.referenceId)
-
-  if (data.referenceId) {
-    const existingTransactions = JSON.parse(localStorage.getItem("wallet_transactions") || "[]")
-    const duplicateTransaction = existingTransactions.find(
-      (t: WalletTransaction) =>
-        t.referenceId === data.referenceId && t.referenceType === data.referenceType && t.status === "completed",
-    )
-
-    if (duplicateTransaction) {
-      console.log(`[v0] ⚠️ WALLET: Duplicate transaction prevented for referenceId: ${data.referenceId}`)
-      console.log(`[v0] ⚠️ WALLET: Existing transaction ID: ${duplicateTransaction.id}`)
-      throw new Error(`Transaction with reference ID ${data.referenceId} already exists`)
-    }
-  }
-
-  const wallet = await getWallet(data.userId)
-  const balanceType = data.balanceType || (data.type === "earning" ? "earnings" : "deposit")
-
-  console.log("[v0] 💰 WALLET: Current wallet state before transaction:")
-  console.log("[v0] 💰 WALLET: - Earnings balance:", wallet.earningsBalance)
-  console.log("[v0] 💰 WALLET: - Deposit balance:", wallet.depositBalance)
-  console.log("[v0] 💰 WALLET: - Total earned:", wallet.totalEarned)
-
-  const newTransaction: WalletTransaction = {
-    id: `txn_${generateUniqueId()}`,
-    walletId: wallet.id,
-    type: data.type,
-    amount: data.amount,
-    feeAmount: 0,
-    netAmount: data.amount,
-    balanceType,
-    description: data.description,
-    referenceId: data.referenceId,
-    referenceType: data.referenceType,
-    status: "completed",
-    createdAt: new Date().toISOString(),
-  }
-
-  // Update wallet balance based on transaction type and balance type
-  const wallets = JSON.parse(localStorage.getItem("wallets") || "{}")
-
-  if (data.type === "earning") {
-    console.log("[v0] 💰 WALLET: Adding", data.amount, "to earnings balance")
-    wallets[data.userId].earningsBalance += data.amount
-    wallets[data.userId].totalEarned += data.amount
-    console.log("[v0] 💰 WALLET: New earnings balance:", wallets[data.userId].earningsBalance)
-    console.log("[v0] 💰 WALLET: New total earned:", wallets[data.userId].totalEarned)
-  } else if (data.type === "deposit") {
-    console.log("[v0] 💰 WALLET: Adding", data.amount, "to deposit balance")
-    wallets[data.userId].depositBalance += data.amount
-    console.log("[v0] 💰 WALLET: New deposit balance:", wallets[data.userId].depositBalance)
-  } else if (data.type === "withdrawal") {
-    const withdrawAmount = Math.abs(data.amount)
-    console.log("[v0] 💰 WALLET: Subtracting", withdrawAmount, "from earnings balance")
-    wallets[data.userId].earningsBalance -= withdrawAmount
-    wallets[data.userId].totalSpent += withdrawAmount
-    console.log("[v0] 💰 WALLET: New earnings balance:", wallets[data.userId].earningsBalance)
-  } else if (data.type === "payment") {
-    const paymentAmount = Math.abs(data.amount)
-    console.log("[v0] 💰 WALLET: Subtracting", paymentAmount, "from deposit balance for payment")
-    wallets[data.userId].depositBalance -= paymentAmount
-    wallets[data.userId].totalSpent += paymentAmount
-    console.log("[v0] 💰 WALLET: New deposit balance:", wallets[data.userId].depositBalance)
-    console.log("[v0] 💰 WALLET: New total spent:", wallets[data.userId].totalSpent)
-  } else if (data.type === "refund") {
-    const refundAmount = Math.abs(data.amount)
-    if (balanceType === "deposit") {
-      console.log("[v0] 💰 WALLET: Adding", refundAmount, "refund to deposit balance")
-      wallets[data.userId].depositBalance += refundAmount
-      console.log("[v0] 💰 WALLET: New deposit balance:", wallets[data.userId].depositBalance)
-    } else {
-      console.log("[v0] 💰 WALLET: Adding", refundAmount, "refund to earnings balance")
-      wallets[data.userId].earningsBalance += refundAmount
-      console.log("[v0] 💰 WALLET: New earnings balance:", wallets[data.userId].earningsBalance)
-    }
-  }
-
-  wallets[data.userId].updatedAt = new Date().toISOString()
-  localStorage.setItem("wallets", JSON.stringify(wallets))
-
-  // Save transaction
-  const transactions = JSON.parse(localStorage.getItem("wallet_transactions") || "[]")
-  transactions.push(newTransaction)
-  localStorage.setItem("wallet_transactions", JSON.stringify(transactions))
-
   try {
-    const notificationTitle = getTransactionNotificationTitle(data.type, data.amount)
-    const notificationDescription = data.description
+    console.log("[v0] 💰 WALLET: Starting secure transaction for user:", data.userId)
+    console.log("[v0] 💰 WALLET: Transaction type:", data.type, "Amount:", data.amount)
+    console.log("[v0] 💰 WALLET: Description:", data.description)
+    console.log("[v0] 💰 WALLET: Reference ID:", data.referenceId)
 
-    await createNotification({
-      userId: data.userId,
-      type: "payment",
-      title: notificationTitle,
-      description: notificationDescription,
-      actionUrl: "/dashboard/wallet",
+    const transaction = await apiCall(`/api/wallet/${data.userId}/transactions`, {
+      method: "POST",
+      body: JSON.stringify({
+        type: data.type,
+        amount: data.amount,
+        description: data.description,
+        referenceId: data.referenceId,
+        referenceType: data.referenceType,
+        balanceType: data.balanceType || (data.type === "earning" ? "earnings" : "deposit"),
+      }),
     })
 
-    console.log("[v0] 🔔 NOTIFICATION: Created transaction notification for user:", data.userId)
+    console.log("[v0] ✅ WALLET: Transaction completed successfully in database!")
+    console.log("[v0] 💰 WALLET: Transaction ID:", transaction.id)
+
+    try {
+      const notificationTitle = getTransactionNotificationTitle(data.type, data.amount)
+      const notificationDescription = data.description
+
+      await createNotification({
+        userId: data.userId,
+        type: "payment",
+        title: notificationTitle,
+        description: notificationDescription,
+        actionUrl: "/dashboard/wallet",
+      })
+
+      console.log("[v0] 🔔 NOTIFICATION: Created transaction notification for user:", data.userId)
+    } catch (error) {
+      console.error("[v0] ❌ NOTIFICATION: Failed to create transaction notification:", error)
+    }
+
+    return transaction
   } catch (error) {
-    console.error("[v0] ❌ NOTIFICATION: Failed to create transaction notification:", error)
+    console.error("[v0] ❌ WALLET: Failed to add transaction:", error)
+    throw new Error("Failed to process transaction")
   }
-
-  console.log("[v0] ✅ WALLET: Transaction completed successfully!")
-  console.log("[v0] 💰 WALLET: Transaction ID:", newTransaction.id)
-  console.log("[v0] 💰 WALLET: Final earnings balance:", wallets[data.userId].earningsBalance)
-
-  return newTransaction
 }
 
 function getTransactionNotificationTitle(type: string, amount: number): string {
@@ -553,40 +383,17 @@ export async function validateTipBalance(
   tipAmount: number,
 ): Promise<{ valid: boolean; error?: string }> {
   try {
-    const wallet = await getWallet(userId)
+    console.log("[v0] 🎁 TIP: Validating tip balance for user:", userId, "Amount:", tipAmount)
 
-    // Check if user has sufficient deposit balance for tip
-    if (wallet.depositBalance < tipAmount) {
-      return {
-        valid: false,
-        error: `Insufficient deposit balance. Required: $${tipAmount.toFixed(2)}, Available: $${wallet.depositBalance.toFixed(2)}`,
-      }
-    }
+    const validation = await apiCall(`/api/wallet/${userId}/validate-tip`, {
+      method: "POST",
+      body: JSON.stringify({ amount: tipAmount }),
+    })
 
-    // Get tip settings to check limits
-    const tipSettings = await getAdminFeeSettings("tip")
-
-    if (tipSettings.isActive) {
-      // Check minimum tip
-      if (tipAmount < tipSettings.minimumFee) {
-        return {
-          valid: false,
-          error: `Minimum tip amount is $${tipSettings.minimumFee.toFixed(2)}`,
-        }
-      }
-
-      // Check maximum tip
-      if (tipSettings.maximumFee && tipAmount > tipSettings.maximumFee) {
-        return {
-          valid: false,
-          error: `Maximum tip amount is $${tipSettings.maximumFee.toFixed(2)}`,
-        }
-      }
-    }
-
-    return { valid: true }
+    console.log("[v0] ✅ TIP: Validation result:", validation)
+    return validation
   } catch (error) {
-    console.error("[v0] Error validating tip balance:", error)
+    console.error("[v0] ❌ TIP: Failed to validate tip balance:", error)
     return {
       valid: false,
       error: "Failed to validate tip balance",
@@ -602,52 +409,28 @@ export async function processTipPayment(data: {
   referenceId: string
 }): Promise<{ success: boolean; error?: string; transactions?: WalletTransaction[] }> {
   try {
-    console.log("[v0] 🎁 TIP: Processing tip payment:", data.tipAmount, "from", data.employerId, "to", data.workerId)
+    console.log(
+      "[v0] 🎁 TIP: Processing secure tip payment:",
+      data.tipAmount,
+      "from",
+      data.employerId,
+      "to",
+      data.workerId,
+    )
 
-    // Validate tip balance first
-    const validation = await validateTipBalance(data.employerId, data.tipAmount)
-    if (!validation.valid) {
-      return { success: false, error: validation.error }
-    }
-
-    const tipSettings = await getAdminFeeSettings("tip")
-    let feeAmount = 0
-
-    if (tipSettings.isActive) {
-      feeAmount = calculateFee(data.tipAmount, tipSettings)
-    }
-
-    const netTipAmount = data.tipAmount - feeAmount
-
-    // Deduct tip amount from employer's deposit balance
-    const employerTransaction = await addWalletTransaction({
-      userId: data.employerId,
-      type: "payment",
-      amount: -data.tipAmount,
-      description: `Tip payment: ${data.description}${feeAmount > 0 ? ` (Fee: $${feeAmount.toFixed(2)})` : ""}`,
-      referenceId: data.referenceId,
-      referenceType: "tip_payment",
-      balanceType: "deposit",
+    const result = await apiCall(`/api/wallet/process-tip`, {
+      method: "POST",
+      body: JSON.stringify({
+        employerId: data.employerId,
+        workerId: data.workerId,
+        amount: data.tipAmount,
+        description: data.description,
+        referenceId: data.referenceId,
+      }),
     })
 
-    // Add tip to worker's earnings balance
-    const workerTransaction = await addWalletTransaction({
-      userId: data.workerId,
-      type: "earning",
-      amount: netTipAmount,
-      description: `Tip received: ${data.description}`,
-      referenceId: data.referenceId,
-      referenceType: "tip",
-      balanceType: "earnings",
-    })
-
-    console.log("[v0] ✅ TIP: Tip processed successfully!")
-    console.log("[v0] 💰 TIP: Employer charged:", data.tipAmount, "Worker received:", netTipAmount, "Fee:", feeAmount)
-
-    return {
-      success: true,
-      transactions: [employerTransaction, workerTransaction],
-    }
+    console.log("[v0] ✅ TIP: Tip processed successfully in database!")
+    return result
   } catch (error) {
     console.error("[v0] ❌ TIP: Failed to process tip payment:", error)
     return {
