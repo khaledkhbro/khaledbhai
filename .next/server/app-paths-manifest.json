@@ -3,5 +3,6 @@
   "/page": "app/page.js",
   "/marketplace/page": "app/marketplace/page.js",
   "/login/page": "app/login/page.js",
+  "/marketplace/[id]/page": "app/marketplace/[id]/page.js",
   "/dashboard/jobs/create/page": "app/dashboard/jobs/create/page.js"
 }
