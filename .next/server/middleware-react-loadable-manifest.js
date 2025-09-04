@@ -1,1 +1,1 @@
-self.__REACT_LOADABLE_MANIFEST="{}"
+self.__REACT_LOADABLE_MANIFEST="{\"components/marketplace/marketplace-provider.tsx -> @/lib/local-storage\":{\"id\":\"components/marketplace/marketplace-provider.tsx -> @/lib/local-storage\",\"files\":[\"static/chunks/_app-pages-browser_lib_local-storage_ts.js\"]},\"contexts/auth-context.tsx -> @/lib/auth\":{\"id\":\"contexts/auth-context.tsx -> @/lib/auth\",\"files\":[\"static/chunks/_app-pages-browser_lib_auth_ts.js\"]}}"
